@@ -53,10 +53,15 @@ ASR_MODEL_FILE = "model.int8.onnx"
 ASR_THREADS = 2
 
 # ==================== 语音合成 ====================
-# 非自回归加显式时长建模，架构上属于 FastSpeech 那一支，输出确定不飘。
-# 训练数据 Baker 通常限非商用。
+# 两个引擎，按机器性能挑：
+#   matcha  22 kHz，音质和韵律都更好，但慢，树莓派上大概跑不动
+#   vits    8 kHz，快四倍，代价是像电话音质
+# 桌面上实测：matcha RTF 7.1，vits RTF 30.7（都是 22 kHz / 8 kHz 的差距带来的）
+TTS_ENGINE = "matcha"
 TTS_MODEL_DIR = "models/tts/matcha-icefall-zh-baker"
 TTS_VOCODER = "models/tts/hifigan_v2.onnx"
+TTS_VITS_DIR = "models/tts/vits-icefall-zh-aishell3"
+TTS_VITS_MODEL = "model.onnx"
 TTS_SPEAKER_ID = 0                 # 单说话人模型，只能填 0
 TTS_SPEED = 1.0                    # 大于 1 更快
 

@@ -48,8 +48,8 @@ def main():
         print("结论：合成比实时慢。两个选择——")
         print("  1. 把 config.TTS_PREBUFFER 调大（比如 60），"
               "等于整段合成完再播，代价是开口变慢")
-        print("  2. 换更小的模型：vits-piper-zh_CN-xiao_ya-medium-int8 只有 13 MB，"
-              "比现在的 matcha 小五倍")
+        print("  2. 换成 config.TTS_ENGINE = \"vits\"：那是个 8 kHz 的模型，"
+              "桌面上快四倍，代价是像电话音质")
 
 
 if __name__ == "__main__":

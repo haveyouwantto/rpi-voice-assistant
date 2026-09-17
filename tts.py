@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 import sherpa_onnx
 
-from config import (TTS_MODEL_DIR, TTS_SPEAKER_ID, TTS_SPEED, TTS_THREADS,
-                    TTS_VOCODER)
+from config import (TTS_ENGINE, TTS_MODEL_DIR, TTS_SPEAKER_ID, TTS_SPEED,
+                    TTS_THREADS, TTS_VITS_DIR, TTS_VITS_MODEL, TTS_VOCODER)
 
 # 句末标点，流式播报时按这些断句
 SENTENCE_END = "。！？!?；;…\n"
@@ -57,14 +57,33 @@ def _find_cut(buffer: str, max_chars: int) -> int | None:
 class SherpaTTS:
     """对外只有 synthesize 和 sample_rate，主流程不用关心模型细节。"""
 
-    def __init__(self, model_dir: str | Path = TTS_MODEL_DIR,
+    def __init__(self, engine: str = TTS_ENGINE,
+                 model_dir: str | Path | None = None,
                  vocoder: str | Path = TTS_VOCODER,
                  speaker_id: int = TTS_SPEAKER_ID, speed: float = TTS_SPEED,
                  num_threads: int = TTS_THREADS, base: Path | None = None):
         base = Path(base) if base else Path(__file__).parent
-        model_dir = base / model_dir
-        vocoder = base / vocoder
+        if engine == "matcha":
+            config = self._matcha_config(base, model_dir, vocoder, num_threads)
+        elif engine == "vits":
+            config = self._vits_config(base, model_dir, num_threads)
+        else:
+            raise ValueError(f"不认识的 TTS 引擎：{engine}")
 
+        self.tts = sherpa_onnx.OfflineTts(config)
+        self.sample_rate = self.tts.sample_rate
+        self.speaker_id = speaker_id
+        self.speed = speed
+
+    # ---------- 两个引擎的配置 ----------
+    @staticmethod
+    def _rule_fsts(model_dir, names):
+        return ",".join(str(model_dir / name) for name in names
+                        if (model_dir / name).exists())
+
+    def _matcha_config(self, base, model_dir, vocoder, num_threads):
+        model_dir = base / (model_dir or TTS_MODEL_DIR)
+        vocoder = base / vocoder
         acoustic = model_dir / "model-steps-3.onnx"
         if not acoustic.exists():
             raise FileNotFoundError(
@@ -76,8 +95,7 @@ class SherpaTTS:
                 f"声码器不存在：{vocoder}\n"
                 f"从 sherpa-onnx 的 vocoder-models 发布页下载 hifigan_v2.onnx"
             )
-
-        self.tts = sherpa_onnx.OfflineTts(sherpa_onnx.OfflineTtsConfig(
+        return sherpa_onnx.OfflineTtsConfig(
             model=sherpa_onnx.OfflineTtsModelConfig(
                 matcha=sherpa_onnx.OfflineTtsMatchaModelConfig(
                     acoustic_model=str(acoustic),
@@ -88,16 +106,34 @@ class SherpaTTS:
                 num_threads=num_threads,
                 provider="cpu",
             ),
-            rule_fsts=",".join(
-                str(model_dir / name)
-                for name in ("phone.fst", "date.fst", "number.fst")
-                if (model_dir / name).exists()
-            ),
+            rule_fsts=self._rule_fsts(model_dir, ("phone.fst", "date.fst", "number.fst")),
             max_num_sentences=1,
-        ))
-        self.sample_rate = self.tts.sample_rate
-        self.speaker_id = speaker_id
-        self.speed = speed
+        )
+
+    def _vits_config(self, base, model_dir, num_threads):
+        """vits 只有单个模型文件，快得多，代价是采样率低。"""
+        model_dir = base / (model_dir or TTS_VITS_DIR)
+        model_path = model_dir / TTS_VITS_MODEL
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"合成模型不存在：{model_path}\n"
+                f"从 sherpa-onnx 的 tts-models 发布页下载 vits-icefall-zh-aishell3"
+            )
+        return sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                    model=str(model_path),
+                    lexicon=str(model_dir / "lexicon.txt"),
+                    tokens=str(model_dir / "tokens.txt"),
+                ),
+                num_threads=num_threads,
+                provider="cpu",
+            ),
+            rule_fsts=self._rule_fsts(
+                model_dir,
+                ("phone.fst", "date.fst", "number.fst", "new_heteronym.fst")),
+            max_num_sentences=1,
+        )
 
     def synthesize(self, text: str) -> np.ndarray:
         text = text.strip()
