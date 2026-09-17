@@ -1,0 +1,24 @@
+# 密钥，绝对不能进仓库
+.env
+
+# 运行期生成的数据
+chat_history.db
+chat_history.db-wal
+chat_history.db-shm
+rag.db
+rag.db-wal
+rag.db-shm
+chat_history.json.migrated
+
+# 模型有三百多 MB，从 sherpa-onnx 的发布页单独下载
+models/
+
+# 下载过程中的临时归档
+*.tar.bz2
+run_out.txt
+run_err.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
