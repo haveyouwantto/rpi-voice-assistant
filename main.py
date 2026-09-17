@@ -26,12 +26,13 @@ from asr import SherpaASR
 from audio import Microphone, Speaker
 from brain import ChatBrain, StreamResult
 from console import LiveLine, echo_stream
-from config import (ASR_MODEL_DIR, HISTORY_DB, KWS_MODEL_DIR, RAG_DB,
+from config import (ASR_MODEL_DIR, DEBUG_TOOLS, HISTORY_DB, KWS_MODEL_DIR, RAG_DB,
                     SILENCE_TIMEOUT, TTS_MAX_SENTENCE_CHARS, TTS_PAUSE_AFTER,
                     WAKE_KEYWORD)
 from pipeline import SpeechPipeline
 from tts import SherpaTTS
 from wakeword import WakeWordDetector
+from tools import pi_tools_enabled
 
 
 class VoiceAssistant:
@@ -80,6 +81,10 @@ class VoiceAssistant:
         print("🤖 全本地中文语音助手")
         print(f"   唤醒词：{WAKE_KEYWORD}")
         print(f"   静音超时：{SILENCE_TIMEOUT}s")
+        print(f"   工具：{'、'.join(self.brain.registry.names())}")
+        if not pi_tools_enabled():
+            print("   （树莓派工具没注册：当前不是树莓派，")
+            print("     想在别的机器上试就把 config.py 里的 PI_TOOLS 设成 True）")
         print("=" * 50)
         print("🎤 休眠中，等待唤醒词...\n")
 
@@ -141,6 +146,10 @@ class VoiceAssistant:
     def _on_user_speech(self, text: str):
         result = StreamResult()
         self._speak(echo_stream("🔊 助手：", self.brain.stream_reply(text, result)))
+        if DEBUG_TOOLS:
+            # 等播报那行收尾了再打，免得和助手说的话挤在同一行
+            print(f"🔧 本轮调用了 {result.tools_called} 个工具" if result.tools_called
+                  else "🔧 本轮没有调用工具", flush=True)
         if result.sleep:
             print("😴 收到结束意图，直接休眠\n")
             self._on_sleep()

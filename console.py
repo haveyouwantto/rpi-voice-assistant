@@ -42,12 +42,19 @@ def echo_stream(prefix: str, chunks):
 
     pipeline 需要的是完整的 chunk 序列，终端要的是即时可见，
     所以在这里串一下：打一行前缀，之后来多少打多少，结束才换行。
+
+    前缀要等第一个字到了再打。模型可能先调工具，这时候还没有正文，
+    提前把前缀打出来会让那一行空挂着，工具的输出没处落脚。
     """
-    print(prefix, end="", flush=True)
+    started = False
     try:
         for chunk in chunks:
+            if not started:
+                print(prefix, end="", flush=True)
+                started = True
             print(chunk, end="", flush=True)
             yield chunk
     finally:
         # 消费者提前退出也要把行收干净，不能把光标留在半截
-        print(flush=True)
+        if started:
+            print(flush=True)

@@ -25,13 +25,25 @@ KWS_JOINER = "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"
 
 # ==================== 对话 ====================
 HISTORY_DB = "chat_history.db"     # 对话历史数据库，相对项目根目录
-HISTORY_MAX = 100                  # 上下文最多保留多少条（不含 system）
-HISTORY_STEP = 50                  # 超过上限时，一次丢掉最旧的多少条
+HISTORY_MAX = 100                  # 上下文窗口宽度（条，不含 system）
+HISTORY_HOP = 25                   # 窗口每次前进多少条；不是每条都滑一格
 MAX_TOOL_ROUNDS = 4                # 一次对话里最多来回几轮工具调用
 
 # ==================== 知识库 ====================
 RAG_DB = "rag.db"
 KNOWLEDGE_DIR = "knowledge"
+
+# ==================== 树莓派工具 ====================
+# None 表示自动判断（跑在树莓派上才启用），True / False 可以强制开关
+PI_TOOLS = None
+
+# 允许模型控制的 GPIO 管脚：名字 -> BCM 管脚号。
+# 只有登记在这里的才能被 gpio_write 驱动，语音指令不会误碰别的引脚。
+# 例如：{"风扇": 18, "补光灯": 17}
+GPIO_PINS = {}
+
+# 工具调用时在终端打印一行，用来确认模型到底有没有真的调工具
+DEBUG_TOOLS = True
 
 # ==================== 语音识别 ====================
 ASR_MODEL_DIR = "models/asr/sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01"
