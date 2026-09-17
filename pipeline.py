@@ -9,6 +9,7 @@
 
 import queue
 import threading
+import time
 
 from tts import split_sentences
 
@@ -24,6 +25,7 @@ class SpeechPipeline:
         sentences: queue.Queue = queue.Queue(maxsize=8)
         audios: queue.Queue = queue.Queue(maxsize=32)
         errors: list[BaseException] = []
+        stats = {"audio": 0.0, "cost": 0.0}
 
         def produce():
             try:
@@ -40,8 +42,11 @@ class SpeechPipeline:
                     sentence = sentences.get()
                     if sentence is None:
                         break
+                    started = time.monotonic()
                     pcm = self.tts.synthesize(sentence)
+                    stats["cost"] += time.monotonic() - started
                     if pcm.size:
+                        stats["audio"] += pcm.size / self.tts.sample_rate
                         audios.put(pcm)
             except BaseException as exc:      # noqa: BLE001
                 errors.append(exc)
@@ -63,7 +68,22 @@ class SpeechPipeline:
 
         if errors:
             raise errors[0]
+        self._report_speed(stats)
         return played
+
+    @staticmethod
+    def _report_speed(stats):
+        """合成比实时慢就在终端提醒一句，省得对着断续的声音猜原因。"""
+        if stats["cost"] < 1.0 or stats["audio"] <= 0:
+            return
+        ratio = stats["audio"] / stats["cost"]
+        if ratio >= 1.0:
+            return
+        print(f"⚠️ 合成只有 {ratio:.2f} 倍实时（{stats['audio']:.1f}s 音频花了 "
+              f"{stats['cost']:.1f}s），播报会断续。", flush=True)
+        print("   把 config.TTS_PREBUFFER 调大（比如 60，等于整段合成完再播），"
+              "或者换个更小的模型。", flush=True)
+        print("   具体多快可以跑 bench_tts.py 量一下。", flush=True)
 
 
 def _drain(items):

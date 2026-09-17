@@ -1,5 +1,7 @@
 """所有可调参数和系统提示词集中在这里，其它模块只读不写。"""
 
+import os
+
 # ==================== 音频 ====================
 ASR_SAMPLE_RATE = 16000
 BLOCK_SIZE = 1280                  # 80ms 一帧，唤醒和识别都按这个粒度喂
@@ -57,10 +59,24 @@ TTS_MODEL_DIR = "models/tts/matcha-icefall-zh-baker"
 TTS_VOCODER = "models/tts/hifigan_v2.onnx"
 TTS_SPEAKER_ID = 0                 # 单说话人模型，只能填 0
 TTS_SPEED = 1.0                    # 大于 1 更快
-TTS_THREADS = 4
 
 # 流式播报：模型一边吐字一边攒句子，攒够这些字就送去合成
 TTS_MAX_SENTENCE_CHARS = 40
+
+# 合成用几个线程。留一个核给声卡和别的活，树莓派上全占满会直接 underrun。
+TTS_THREADS = max(1, (os.cpu_count() or 2) - 1)
+
+# 开播前先攒够多少秒音频。合成比实时慢的机器（比如树莓派）不攒就开播，
+# 声卡供不上就会一直 underrun。攒一段能把小幅卡顿吸收掉；
+# 设得足够大（比如 60）就等于"整段合成完再播"，代价是开口更晚。
+TTS_PREBUFFER = 0.8
+
+# 声卡缓冲区大小（秒）。大一点更能扛住偶发的卡顿，代价是延迟略增。
+AUDIO_LATENCY = 0.4
+
+# ALSA 自己在 C 层往 stderr 打 underrun 之类的日志，Python 拦不住，
+# 这里用 ctypes 把它的错误处理器换掉。只在 Linux 上有效。
+SILENCE_ALSA_ERRORS = True
 
 
 SYSTEM_PROMPT = """你是一个运行在树莓派上的智能语音助手，叫做小白，负责通过麦克风与用户进行纯语音交流，并通过扬声器播放你的回答。

@@ -1,13 +1,37 @@
 """麦克风采集和扬声器播放，是唯一直接碰 sounddevice 的地方。"""
 
 import queue
+import sys
 import threading
 
 import numpy as np
 import sounddevice as sd
 
-from config import (ASR_SAMPLE_RATE, BLOCK_SIZE, PROMPT_TONE_DURATION,
-                    PROMPT_TONE_FREQ, PROMPT_TONE_VOLUME)
+from config import (ASR_SAMPLE_RATE, AUDIO_LATENCY, BLOCK_SIZE,
+                    PROMPT_TONE_DURATION, PROMPT_TONE_FREQ, PROMPT_TONE_VOLUME,
+                    SILENCE_ALSA_ERRORS, TTS_PREBUFFER)
+
+_alsa_handler = None          # 必须留个引用，回调被回收会让进程直接崩
+
+
+def silence_alsa_errors():
+    """把 ALSA 的错误处理器换成空函数。
+
+    underrun 这类提示是 ALSA 在 C 层直接往 stderr 打的，Python 的日志和
+    重定向都拦不住，只能用 ctypes 换掉它的处理函数。只在 Linux 上有效。
+    """
+    global _alsa_handler
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        from ctypes import CFUNCTYPE, c_char_p, c_int, cdll
+
+        handler_type = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
+        _alsa_handler = handler_type(lambda *args: None)
+        cdll.LoadLibrary("libasound.so.2").snd_lib_error_set_handler(_alsa_handler)
+        return True
+    except Exception:
+        return False
 
 
 class Microphone:
@@ -61,6 +85,8 @@ class Microphone:
 class Speaker:
     def __init__(self):
         self._lock = threading.Lock()
+        if SILENCE_ALSA_ERRORS:
+            silence_alsa_errors()
 
     def play(self, pcm: np.ndarray, sample_rate: int):
         if pcm.size == 0:
@@ -87,13 +113,19 @@ class Speaker:
     def stop(self):
         sd.stop()
 
-    def play_stream(self, chunks, sample_rate: int) -> bool:
-        """边收边播：chunks 是一个产出 PCM 的可迭代对象，遇到 None 结束。
+    def play_stream(self, chunks, sample_rate: int,
+                    prebuffer: float = TTS_PREBUFFER) -> bool:
+        """边收边播，开播前先攒够 prebuffer 秒。
 
-        用 OutputStream 而不是 sd.play，是因为它能在播放的同时继续往里写，
-        合成那边就不用等上一段播完。返回是否真的播出过声音。
+        chunks 产出 PCM，遇到 None 结束，返回是否真的播出过声音。
+
+        合成比实时慢的机器（树莓派就是）一有声音就开播的话，声卡很快供不上，
+        于是 ALSA 一直报 underrun、声音断续。先攒一段再开播，小幅卡顿就被
+        吸收掉了；prebuffer 设得足够大就等于"整段合成完再播"。
         """
-        played = False
+        target = int(max(prebuffer, 0.0) * sample_rate)
+        pending: list = []
+        buffered = 0
         stream = None
         with self._lock:
             try:
@@ -101,14 +133,30 @@ class Speaker:
                     if pcm is None or len(pcm) == 0:
                         continue
                     if stream is None:
-                        stream = sd.OutputStream(
-                            samplerate=sample_rate, channels=1, dtype="int16"
-                        )
-                        stream.start()
+                        pending.append(np.asarray(pcm, dtype=np.int16))
+                        buffered += len(pcm)
+                        if buffered < target:
+                            continue
+                        stream = self._open_stream(sample_rate)
+                        for piece in pending:
+                            stream.write(piece)
+                        pending = []
+                        continue
                     stream.write(np.asarray(pcm, dtype=np.int16))
-                    played = True
+                if stream is None and pending:
+                    # 还没攒够就结束了，剩下的一起播出去
+                    stream = self._open_stream(sample_rate)
+                    for piece in pending:
+                        stream.write(piece)
             finally:
                 if stream is not None:
                     stream.stop()
                     stream.close()
-        return played
+        return stream is not None
+
+    @staticmethod
+    def _open_stream(sample_rate: int):
+        stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16",
+                                 latency=AUDIO_LATENCY)
+        stream.start()
+        return stream
