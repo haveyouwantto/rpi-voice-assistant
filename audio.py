@@ -3,11 +3,13 @@
 import queue
 import sys
 import threading
+import time
 
 import numpy as np
 import sounddevice as sd
 
 from config import (ASR_SAMPLE_RATE, AUDIO_LATENCY, BLOCK_SIZE,
+                    PLAYBACK_DRAIN,
                     PROMPT_TONE_DURATION, PROMPT_TONE_FREQ, PROMPT_TONE_VOLUME,
                     SILENCE_ALSA_ERRORS, TTS_PREBUFFER)
 
@@ -92,7 +94,11 @@ class Speaker:
         if pcm.size == 0:
             return
         with self._lock:
-            sd.play(pcm, samplerate=sample_rate, blocking=True)
+            stream = self._open_stream(sample_rate)
+            try:
+                stream.write(np.asarray(pcm, dtype=np.int16))
+            finally:
+                _finish(stream, sample_rate)
 
     def beep(self, sample_rate: int, freq=PROMPT_TONE_FREQ,
              duration=PROMPT_TONE_DURATION, volume=PROMPT_TONE_VOLUME):
@@ -109,9 +115,6 @@ class Speaker:
         wave[:fade] *= np.linspace(0.0, 1.0, fade)
         wave[-fade:] *= np.linspace(1.0, 0.0, fade)
         self.play((wave * volume * 32767).astype(np.int16), sample_rate)
-
-    def stop(self):
-        sd.stop()
 
     def play_stream(self, chunks, sample_rate: int,
                     prebuffer: float = TTS_PREBUFFER) -> bool:
@@ -150,8 +153,7 @@ class Speaker:
                         stream.write(piece)
             finally:
                 if stream is not None:
-                    stream.stop()
-                    stream.close()
+                    _finish(stream, sample_rate)
         return stream is not None
 
     @staticmethod
@@ -160,3 +162,20 @@ class Speaker:
                                  latency=AUDIO_LATENCY)
         stream.start()
         return stream
+
+
+def _finish(stream, sample_rate: int):
+    """把声卡缓冲区放干净再关流，不然最后一段会被丢掉。
+
+    症状是每句话的最后一点听不到。原因是关流时 ALSA 把内核缓冲区里还没播完的
+    数据直接扔了，portaudio 的 stop() 只保证它自己那层队列排空，管不到 ALSA。
+
+    办法是先往尾巴上补一段静音当替死鬼，再等声卡缓冲区那么久——等真正的内容
+    已经出了设备，再关流就没什么可丢的了。丢的只是那段静音。
+    """
+    drain = int(PLAYBACK_DRAIN * sample_rate)
+    if drain > 0:
+        stream.write(np.zeros(drain, dtype=np.int16))
+        time.sleep(PLAYBACK_DRAIN)
+    stream.stop()
+    stream.close()
