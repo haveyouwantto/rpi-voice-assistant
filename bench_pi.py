@@ -211,7 +211,7 @@ def bench_tts_engine(engine):
 def bench_tts():
     section("语音合成（实时率大于 1 才能边合成边播）")
     results = {}
-    for engine in ("matcha", "vits"):
+    for engine in ("matcha", "vits", "piper"):
         try:
             rate, audio, cost, load = bench_tts_engine(engine)
         except Exception as exc:
@@ -231,14 +231,24 @@ def summarize(wake, asr_rtf, tts_results):
 
     if wake:
         per_frame, budget = wake
-        if per_frame < budget:
-            print(f"  唤醒词  没问题，每帧只用了预算的 {per_frame / budget * 100:.0f}%")
+        share = per_frame / budget
+        if share < 0.5:
+            print(f"  唤醒词  没问题，每帧只用了预算的 {share * 100:.0f}%")
+        elif share < 0.8:
+            print(f"  唤醒词  偏紧，用了预算的 {share * 100:.0f}%，"
+                  f"别让别的活跟它抢 CPU")
         else:
-            print(f"  唤醒词  跟不上，每帧 {per_frame * 1000:.0f} 毫秒超过 80 毫秒预算")
+            print(f"  唤醒词  跟不上，每帧 {per_frame * 1000:.0f} 毫秒，"
+                  f"预算只有 80 毫秒")
 
     if asr_rtf:
-        print("  识别    " + ("没问题" if asr_rtf > 1.5 else "有点紧，可能会漏字")
-              + f"，实时率 {asr_rtf:.1f}")
+        if asr_rtf >= 2.0:
+            word = "没问题"
+        elif asr_rtf >= 1.2:
+            word = "够用，余量不大"
+        else:
+            word = "跟不上，会漏字"
+        print(f"  识别    {word}，实时率 {asr_rtf:.1f}")
 
     if not tts_results:
         print("  合成    没有可用的模型")
@@ -255,34 +265,45 @@ def summarize(wake, asr_rtf, tts_results):
         print(f"  合成 {engine:<7} 采样率 {rate:>5}  实时率 {rtf:>6.1f}{suffix}")
 
     print()
+    # 需要攒多少缓冲：设实时率 r、音频总长 D，播放时缓冲区是 P + r·t - t，
+    # 要全程不为负就得 P >= D·(1-r)。r 到 1 以上基本不用攒，只留点余量吸收抖动。
+    def suggest(rate_rtf, audio_seconds):
+        return max(3.0, audio_seconds * (1 - min(rate_rtf, 1.0)) * 1.5)
+
     # 先看当前在用的够不够，够就别折腾
     current = tts_results.get(TTS_ENGINE)
-    if current and current[1] >= 1.5:
+    if current and current[1] >= 1.3:
         print(f"  => 当前用的 {TTS_ENGINE} 有 {current[1]:.1f} 倍实时，够用，不用动。")
         return
     if current and current[1] >= 1.0:
-        print(f"  => {TTS_ENGINE} 只有 {current[1]:.2f} 倍实时，勉强跟得上。"
-              f"把 TTS_PREBUFFER 调到 2 会更稳（现在是 {TTS_PREBUFFER}）。")
+        print(f"  => {TTS_ENGINE} 有 {current[1]:.2f} 倍实时，刚好跟得上，"
+              f"余量很薄。")
+        print(f"     把 TTS_PREBUFFER 设成 {suggest(current[1], 12):.0f} 左右"
+              f"（现在是 {TTS_PREBUFFER}）就能吸收抖动。")
         return
 
     fastest = max(tts_results.items(), key=lambda item: item[1][1])
     engine, (rate, rtf) = fastest
     head = f"  当前用的 {TTS_ENGINE} " + (
         f"只有 {current[1]:.2f} 倍实时" if current else "没有可用模型") + "。"
-    if rtf >= 1.5:
+    if rtf >= 1.3:
         print(head + f"换成 {engine} 有 {rtf:.1f} 倍实时，够用。")
         print(f'     把 config.py 里的 TTS_ENGINE 改成 "{engine}"，'
               f"代价是采样率从 {tts_results[TTS_ENGINE][0] if current else '?'} "
               f"降到 {rate}。")
     elif rtf >= 1.0:
-        print(head + f"最快的 {engine} 也只有 {rtf:.2f} 倍，"
-              f"把 TTS_PREBUFFER 调到 60（现在 {TTS_PREBUFFER}）会更稳。")
+        print(head + f"换成 {engine} 有 {rtf:.2f} 倍实时，刚好跟得上。")
+        print(f'     TTS_ENGINE 改成 "{engine}"，'
+              f"TTS_PREBUFFER 设成 {suggest(rtf, 12):.0f} 左右"
+              f"（现在是 {TTS_PREBUFFER}）就能顺下来。")
     else:
+        need = suggest(rtf, 12)
         print(head + f"最快的 {engine} 也只有 {rtf:.2f} 倍实时，"
               f"合成比播放慢 {1 / rtf:.1f} 倍，边合成边播一定会断续。")
-        print(f"     TTS_PREBUFFER 调到 60 以上（现在 {TTS_PREBUFFER}），"
-              f"等于整段合成完再播。")
-        print("     如果声音还很糊，那就只能换更快的板子了。")
+        print(f'     换成 "{engine}" 并把 TTS_PREBUFFER 设成 {need:.0f} 左右'
+              f"（现在是 {TTS_PREBUFFER}），")
+        print(f"     开口前要等大约 {need / rtf:.0f} 秒，之后就是连续的一段。")
+        print("     嫌等得久就只能换更快的板子，或者让回复更短。")
 
 
 def main():

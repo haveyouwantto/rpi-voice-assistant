@@ -8,6 +8,24 @@ BLOCK_SIZE = 1280                  # 80ms 一帧，唤醒和识别都按这个�
 SILENCE_TIMEOUT = 20.0             # 唤醒后多久没说话就回休眠
 TTS_PAUSE_AFTER = 0.15             # 播报结束后多等一会儿再开麦克风
 
+# 开流之后等这么久再响"可以说了"的提示音。
+# 声卡从 start() 到真正开始送帧有一两百毫秒，不等它转起来，用户听到提示音
+# 立刻开口，第一个字就落在启动窗口里被吞掉了。
+MIC_WARMUP = 0.2
+
+# 识别出半句话之后，再等这么久没有新语音才交给模型。
+# 端点检测在连续静音一秒多就会切断，用户句中间停顿时会被误判成说完了；
+# 这段时间用来把被切断的几段重新拼起来。
+TURN_GRACE = 0.9
+
+# 被切断的几段之间插什么。
+# 识别只在端点处出结果，而端点本身就意味着至少一秒多的静音，
+# 所以每个片段边界都是一次真实停顿，这里就是标出停顿的地方。
+PAUSE_SEPARATOR = " "
+
+# 静音超时回休眠前说的话。设成空串就不出声。
+SLEEP_NOTICE = "我先退下了。"
+
 # 播报结束后提示"可以说了"的短音
 PROMPT_TONE_FREQ = 880             # Hz，调高更尖，调低更闷
 PROMPT_TONE_DURATION = 0.09        # 秒，改成 0 就不播提示音
@@ -53,15 +71,23 @@ ASR_MODEL_FILE = "model.int8.onnx"
 ASR_THREADS = 2
 
 # ==================== 语音合成 ====================
-# 两个引擎，按机器性能挑：
-#   matcha  22 kHz，音质和韵律都更好，但慢，树莓派上大概跑不动
-#   vits    8 kHz，快四倍，代价是像电话音质
-# 桌面上实测：matcha RTF 7.1，vits RTF 30.7（都是 22 kHz / 8 kHz 的差距带来的）
+# 三个引擎，按机器性能挑。桌面（x86，5 线程）实测：
+#   matcha  75.7 MB  22050 Hz  RTF 5.8   音质最好，最慢
+#   vits    29.1 MB   8000 Hz  RTF 32.5  最快，电话音质
+#   piper   17.8 MB  22050 Hz  RTF 2.8   x86 上最慢
+# piper 那两个是 int8 模型，x86 上要反复反量化所以吃亏；
+# 树莓派是 ARM，int8 有硬件加速，很可能反超。所以三个都值得在 Pi 上量一遍。
 TTS_ENGINE = "matcha"
 TTS_MODEL_DIR = "models/tts/matcha-icefall-zh-baker"
 TTS_VOCODER = "models/tts/hifigan_v2.onnx"
 TTS_VITS_DIR = "models/tts/vits-icefall-zh-aishell3"
 TTS_VITS_MODEL = "model.onnx"
+TTS_PIPER_DIR = "models/tts/vits-piper-zh_CN-xiao_ya-medium-int8"
+TTS_PIPER_MODEL = "zh_CN-xiao_ya-medium.onnx"
+# zhtts：FastSpeech2 + MB-MelGAN，TFLite，24 kHz。模型只有 23.5 MB，
+# 是这批里唯一为低端设备设计的，树莓派上最有可能跑进实时。
+ZHTTS_DIR = "models/tts/zhtts"
+ZHTTS_SILENCE = 0.2                # 分句之间的静音，秒
 TTS_SPEAKER_ID = 0                 # 单说话人模型，只能填 0
 TTS_SPEED = 1.0                    # 大于 1 更快
 

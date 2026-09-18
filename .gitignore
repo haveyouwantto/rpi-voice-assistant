@@ -20,6 +20,9 @@ models/
 run_out.txt
 run_err.txt
 
+# 合成出来的试听文件
+samples/
+
 # Python
 __pycache__/
 *.pyc

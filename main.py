@@ -22,13 +22,14 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 
-from asr import SherpaASR
+from asr import SherpaASR, punctuate
 from audio import Microphone, Speaker
 from brain import ChatBrain, StreamResult
 from console import LiveLine, echo_stream
-from config import (ASR_MODEL_DIR, DEBUG_TOOLS, HISTORY_DB, KWS_MODEL_DIR, RAG_DB,
-                    SILENCE_TIMEOUT, TTS_MAX_SENTENCE_CHARS, TTS_PAUSE_AFTER,
-                    WAKE_KEYWORD)
+from config import (ASR_MODEL_DIR, DEBUG_TOOLS, HISTORY_DB, KWS_MODEL_DIR,
+                    MIC_WARMUP, PAUSE_SEPARATOR, RAG_DB, SILENCE_TIMEOUT,
+                    SLEEP_NOTICE, TTS_MAX_SENTENCE_CHARS, TTS_PAUSE_AFTER,
+                    TURN_GRACE, WAKE_KEYWORD)
 from pipeline import SpeechPipeline
 from tts import SherpaTTS
 from wakeword import WakeWordDetector
@@ -50,6 +51,7 @@ class VoiceAssistant:
 
         self.state = "IDLE"
         self.last_voice_time = 0.0
+        self._pending: list[str] = []      # 攒着还没交给模型的识别结果
         self._user_line = LiveLine("📝 你说：")
 
     # ---------- 播报 ----------
@@ -58,7 +60,11 @@ class VoiceAssistant:
         self._speak(echo_stream("🔊 助手：", iter([text])))
 
     def _speak(self, text_chunks):
-        """边收边合成边播。期间关掉麦克风，播完响一声提示音再开。"""
+        """边收边合成边播。
+
+        麦克风在播报期间是关着的，播完之后先开流、等它热起来，再响提示音，
+        然后丢掉开流和提示音期间采到的帧——这时候才开始算用户的话。
+        """
         self.mic.stop()
         self.mic.flush()
         played = False
@@ -67,10 +73,14 @@ class VoiceAssistant:
         except Exception as exc:
             print(f"[播报] 出错：{exc}")
         time.sleep(TTS_PAUSE_AFTER)
-        self.mic.flush()
+        # 先把采集流开起来，等它真正开始送帧，再响提示音。
+        # 反过来的话用户听到提示音就开口，第一个字会被启动延迟吃掉。
+        self.mic.start()
+        time.sleep(MIC_WARMUP)
         if played:
             self.speaker.beep(self.tts.sample_rate)
-        self.mic.start()
+        # 丢掉开流和提示音期间采到的帧，麦克风已经热好了
+        self.mic.flush()
         # 播报期间麦克风是停的，静音计时必须从重新开录这一刻算起，
         # 否则生成加播报的时间会被算进静音超时，用户还没开口就回休眠了。
         self.last_voice_time = time.time()
@@ -112,22 +122,41 @@ class VoiceAssistant:
 
     # ---------- 监听状态：只跑识别 ----------
     def _handle_listening(self, data: bytes):
+        if self.state != "LISTENING":
+            return                      # 已经回休眠了，这一帧不该还走这条分支
         text = self.asr.feed(data)
+        now = time.time()
 
         if text:
-            self._user_line.finish(text)
-            self.last_voice_time = time.time()
-            self._on_user_speech(text)
+            # 拿到一段识别结果先攒着，不马上交给模型。
+            # 端点检测在连续静音一秒多就触发，用户句中间停一下就会被切断，
+            # 而一旦交给模型，麦克风马上就关了，后半句等于对着关掉的麦说的。
+            self._pending.append(text)
+            self.last_voice_time = now
+            self._user_line.update(PAUSE_SEPARATOR.join(self._pending))
         else:
             partial = self.asr.partial()
             if partial:
                 # 还在说，端点检测没到，先别让静音超时把对话掐了
-                self.last_voice_time = time.time()
-                self._user_line.update(partial)
+                self.last_voice_time = now
+                shown = PAUSE_SEPARATOR.join([*self._pending, partial])
+                self._user_line.update(shown)
 
-        if time.time() - self.last_voice_time > SILENCE_TIMEOUT:
+        idle = now - self.last_voice_time
+        if self._pending and idle > TURN_GRACE:
+            self._commit_turn()
+        elif idle > SILENCE_TIMEOUT:
             print("💤 静音超时，回到休眠\n")
-            self._on_sleep()
+            self._on_sleep(announce=True)
+
+    def _commit_turn(self):
+        """攒够了，把整段话交给模型。"""
+        text = punctuate(self._pending, PAUSE_SEPARATOR)
+        self._pending.clear()
+        if not text:
+            return
+        self._user_line.finish(text)
+        self._on_user_speech(text)
 
     # ---------- 状态切换 ----------
     def _on_wake(self):
@@ -135,10 +164,15 @@ class VoiceAssistant:
         self.last_voice_time = time.time()
         self.asr.reset()
         self.wakeword.reset()
+        self._pending.clear()
         self.say("在呢")
 
-    def _on_sleep(self):
+    def _on_sleep(self, announce=False):
+        """回休眠。announce 为真时先出声说一句，让用户知道助手不听了。"""
+        if announce and SLEEP_NOTICE:
+            self.say(SLEEP_NOTICE)
         self.state = "IDLE"
+        self._pending.clear()
         self.asr.reset()
         self.wakeword.reset()
         self.mic.flush()

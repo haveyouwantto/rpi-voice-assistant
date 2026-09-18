@@ -73,17 +73,26 @@ class SpeechPipeline:
 
     @staticmethod
     def _report_speed(stats):
-        """合成比实时慢就在终端提醒一句，省得对着断续的声音猜原因。"""
+        """合成跟不上就提醒，并算出该攒多少缓冲，省得对着断续的声音猜。
+
+        设实时率为 r、这段音频总长 D、开播前攒了 P 秒。播放时缓冲区是
+        P + r·t - t，要全程不为负就得 P >= D·(1-r)。r 越接近 1 需要的越少，
+        r 到 1 以上就完全不需要攒——所以"一律调成 60"是错的做法，白等。
+        """
         if stats["cost"] < 1.0 or stats["audio"] <= 0:
             return
         ratio = stats["audio"] / stats["cost"]
-        if ratio >= 1.0:
+        if ratio >= 1.3:
             return
-        print(f"⚠️ 合成只有 {ratio:.2f} 倍实时（{stats['audio']:.1f}s 音频花了 "
-              f"{stats['cost']:.1f}s），播报会断续。", flush=True)
-        print("   把 config.TTS_PREBUFFER 调大（比如 60，等于整段合成完再播），"
-              "或者换个更小的模型。", flush=True)
-        print("   具体多快可以跑 bench_tts.py 量一下。", flush=True)
+        audio = stats["audio"]
+        need = max(3.0, audio * (1 - min(ratio, 1.0)) * 1.5)
+        print(f"⚠️ 合成 {ratio:.2f} 倍实时（{audio:.1f}s 音频花了 "
+              f"{stats['cost']:.1f}s），留给播放的余量很薄。", flush=True)
+        print(f"   把 config.TTS_PREBUFFER 设成 {need:.0f} 左右，"
+              f"这轮就不会断。", flush=True)
+        if ratio < 0.7:
+            print("   合成比播放慢不少，开口前要等一会儿；"
+                  "换更快的模型或者让回复短一点会好很多。", flush=True)
 
 
 def _drain(items):

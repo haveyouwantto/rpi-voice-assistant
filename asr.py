@@ -6,6 +6,7 @@
 端点检测交给模型自己做：连续静音就判定一句话说完，不用在外面维护计时器。
 """
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -55,3 +56,41 @@ class SherpaASR:
 
     def reset(self):
         self.recognizer.reset(self.stream)
+
+
+# 判断疑问语气。两个坑：
+#   "吧" 是商量语气（"你走吧"），不算提问；
+#   "几个" 前面加"好"就成了数量（"好几个地方"），不能当疑问词。
+QUESTION_TAILS = ("吗", "呢", "么")
+QUESTION_PATTERN = re.compile(
+    r"什么|怎么|为什么|哪|谁|多少|几点|几号|几天|几次|(?<!好)几个|"
+    r"是否|是不是|能不能|可不可以|有没有|行不行|要不要|对不对"
+)
+
+
+def looks_like_question(text: str) -> bool:
+    stripped = text.rstrip("。？！，、 ")
+    if not stripped:
+        return False
+    if stripped.endswith(QUESTION_TAILS):
+        return True
+    return bool(QUESTION_PATTERN.search(stripped))
+
+
+def punctuate(fragments, separator: str = " ") -> str:
+    """把几段识别结果拼起来，标出停顿并补上句末标点。
+
+    识别模型是流式 CTC，只看左边上下文，而标点要看完整个句子才能判断，
+    所以它不输出任何标点。补的办法：
+
+    - 几段之所以分开，是因为端点检测在中间听到了静音，也就是用户确实停顿了，
+      所以每处边界都用 separator 标一下；
+    - 结尾按有没有疑问词决定问号还是句号。
+
+    这样送给模型的就不是一长串没头没尾的汉字了。问号尤其重要——
+    模型得知道用户是在提问还是在陈述。
+    """
+    text = separator.join(piece.strip() for piece in fragments if piece.strip())
+    if not text:
+        return ""
+    return text + ("？" if looks_like_question(text) else "。")

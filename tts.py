@@ -12,8 +12,9 @@ from pathlib import Path
 import numpy as np
 import sherpa_onnx
 
-from config import (TTS_ENGINE, TTS_MODEL_DIR, TTS_SPEAKER_ID, TTS_SPEED,
-                    TTS_THREADS, TTS_VITS_DIR, TTS_VITS_MODEL, TTS_VOCODER)
+from config import (TTS_ENGINE, TTS_MODEL_DIR, TTS_PIPER_DIR, TTS_PIPER_MODEL,
+                    TTS_SPEAKER_ID, TTS_SPEED, TTS_THREADS, TTS_VITS_DIR,
+                    TTS_VITS_MODEL, TTS_VOCODER)
 
 # 句末标点，流式播报时按这些断句
 SENTENCE_END = "。！？!?；;…\n"
@@ -59,6 +60,7 @@ class SherpaTTS:
 
     def __init__(self, engine: str = TTS_ENGINE,
                  model_dir: str | Path | None = None,
+                 model_file: str | None = None,
                  vocoder: str | Path = TTS_VOCODER,
                  speaker_id: int = TTS_SPEAKER_ID, speed: float = TTS_SPEED,
                  num_threads: int = TTS_THREADS, base: Path | None = None):
@@ -66,7 +68,11 @@ class SherpaTTS:
         if engine == "matcha":
             config = self._matcha_config(base, model_dir, vocoder, num_threads)
         elif engine == "vits":
-            config = self._vits_config(base, model_dir, num_threads)
+            config = self._vits_config(base, model_dir,
+                                       model_file or TTS_VITS_MODEL, num_threads)
+        elif engine == "piper":
+            config = self._vits_config(base, model_dir or TTS_PIPER_DIR,
+                                       model_file or TTS_PIPER_MODEL, num_threads)
         else:
             raise ValueError(f"不认识的 TTS 引擎：{engine}")
 
@@ -110,14 +116,14 @@ class SherpaTTS:
             max_num_sentences=1,
         )
 
-    def _vits_config(self, base, model_dir, num_threads):
-        """vits 只有单个模型文件，快得多，代价是采样率低。"""
+    def _vits_config(self, base, model_dir, model_file, num_threads):
+        """单个模型文件的 VITS 系（icefall 的和 Piper 转过来的都走这里）。"""
         model_dir = base / (model_dir or TTS_VITS_DIR)
-        model_path = model_dir / TTS_VITS_MODEL
+        model_path = model_dir / model_file
         if not model_path.exists():
             raise FileNotFoundError(
                 f"合成模型不存在：{model_path}\n"
-                f"从 sherpa-onnx 的 tts-models 发布页下载 vits-icefall-zh-aishell3"
+                f"从 sherpa-onnx 的 tts-models 发布页下载对应模型"
             )
         return sherpa_onnx.OfflineTtsConfig(
             model=sherpa_onnx.OfflineTtsModelConfig(
